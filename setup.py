@@ -11,6 +11,7 @@ CREATE_ANALYSES_TABLE_QUERY = """
     CREATE TABLE IF NOT EXISTS analyses (
         analysis_id VARCHAR(255) PRIMARY KEY NOT NULL,
         release_id VARCHAR(255) NOT NULL,
+        insertion_date DATE NOT NULL,
         dependencies JSONB NOT NULL,
         activation_events JSONB NOT NULL,
         FOREIGN KEY (release_id) REFERENCES releases (release_id) ON DELETE CASCADE

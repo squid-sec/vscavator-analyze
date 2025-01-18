@@ -4,6 +4,7 @@ import os
 from typing import List
 from logging import Logger
 import psycopg2
+from psycopg2.extras import execute_values
 import pandas as pd
 
 
@@ -33,6 +34,27 @@ def connect_to_database(logger: Logger) -> psycopg2.extensions.connection:
         os.getenv("PG_HOST"),
     )
     return None
+
+
+def upsert_data(
+    logger: Logger,
+    connection: psycopg2.extensions.connection,
+    table_name: str,
+    upsert_data_query: str,
+    data: list,
+) -> None:
+    """Executes the upsert data query with the given data on the given table"""
+
+    cursor = connection.cursor()
+    execute_values(cursor, upsert_data_query, data)
+    connection.commit()
+    cursor.close()
+
+    logger.info(
+        "upsert_data: Upserted %d rows of %s data to the database",
+        len(data),
+        table_name,
+    )
 
 
 def select_data(
