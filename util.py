@@ -63,7 +63,7 @@ def select_extensions(
         SELECT
             extension_id,
             extension_name,
-            publisher_id,
+            publisher_id
         FROM
             extensions;
     """
@@ -95,6 +95,8 @@ def select_releases(
     query = """
         SELECT
             release_id,
+            extension_id,
+            version,
             uploaded_to_s3
         FROM
             releases;

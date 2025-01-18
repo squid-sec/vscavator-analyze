@@ -4,13 +4,13 @@ import os
 import re
 import json
 import zipfile
-from logging import Logger
+import shutil
 from urllib.parse import urlparse
 from dotenv import load_dotenv
 from botocore.client import BaseClient
 import boto3
 
-from setup import configure_logger
+from setup import configure_logger, setup_db
 from util import (
     connect_to_database,
     select_extensions,
@@ -95,12 +95,26 @@ def find_external_urls(object_key: str) -> list:
     return external_urls_list
 
 
+def clear_directory(directory):
+    """TODO"""
+
+    if os.path.exists(directory):
+        for item in os.listdir(directory):
+            item_path = os.path.join(directory, item)
+            if os.path.isfile(item_path) or os.path.islink(item_path):
+                os.unlink(item_path)
+            elif os.path.isdir(item_path):
+                shutil.rmtree(item_path)
+
+
 def main():
     """Executes the entire extension analysis process"""
 
     # Setup
     load_dotenv()
     logger = configure_logger()
+
+    setup_db(logger)
     connection = connect_to_database(logger)
     s3_client = boto3.client("s3")
 
@@ -112,18 +126,23 @@ def main():
     )
 
     analyses_df = select_analyses(logger, connection)
+    analyzed_release_ids = set(analyses_df["release_id"])
 
-    for release in combined_df:
-        if release["uploaded_to_s3"] and release["release_id"] not in analyses_df:
-            publisher_name = release["publisher_name"]
-            extension_name = release["extension_name"]
-            release_version = release["version"]
+    for _, row in combined_df.iterrows():
+        if row["uploaded_to_s3"] and row["release_id"] not in analyzed_release_ids:
+            publisher_name = row["publisher_name"]
+            extension_name = row["extension_name"]
+            release_version = row["version"]
 
-            object_key = f"extensions/{publisher_name}/{extension_name}/{release_version}"
+            object_key = (
+                f"extensions/{publisher_name}/{extension_name}/{release_version}.vsix"
+            )
             download_vsix_file(s3_client, object_key)
             unzip_vsix_file(object_key)
 
-            # TODO: cleanup_vsix_file(object_key)
+            # Perform static and dynamic analysis here
+
+            clear_directory("extensions")
             break
 
 
