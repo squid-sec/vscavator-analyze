@@ -15,6 +15,7 @@ CREATE_ANALYSES_TABLE_QUERY = """
         dependencies JSONB NOT NULL,
         activation_events JSONB NOT NULL,
         semgrep_detections JSONB NOT NULL,
+        npm_audit_vulnerabilities JSONB NOT NULL,
         FOREIGN KEY (release_id) REFERENCES releases (release_id) ON DELETE CASCADE
     );
 """
