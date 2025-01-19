@@ -4,6 +4,7 @@ import os
 import json
 import zipfile
 import shutil
+import subprocess
 from datetime import date
 from logging import Logger
 from dotenv import load_dotenv
@@ -22,6 +23,17 @@ from util import (
     select_analyses,
     upsert_data,
 )
+
+API_CALL_STRINGS = [
+    "https.request",
+    "axios.get",
+    "axios.post",
+    "axios.delete",
+    "axios.patch",
+    "axios.put",
+    'fetch("http',
+    "fetch('http",
+]
 
 
 def download_vsix_file(logger: Logger, s3_client: BaseClient, object_key: str) -> None:
@@ -81,6 +93,33 @@ def extract_package_metadata(package_json: dict) -> dict:
     }
 
 
+def semgrep_analysis() -> dict:
+    """Performs static code analysis using semgrep"""
+
+    result = subprocess.run(
+        ["semgrep", "--config", "semgrep", "extensions/unzipped", "--json"],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    semgrep_output = json.loads(result.stdout)
+    return semgrep_output
+
+
+def extract_semgrep_metadata(semgrep_output: dict) -> dict:
+    """Extracts relevant semgrep metadata"""
+
+    semgrep_metadata = {"semgrep_detections": []}
+
+    results = semgrep_output["results"]
+    for result in results:
+        if result["extra"]["message"] not in semgrep_metadata["semgrep_detections"]:
+            semgrep_metadata["semgrep_detections"].append(result["extra"]["message"])
+
+    return semgrep_metadata
+
+
 def upsert_analyses(
     logger: Logger,
     connection: psycopg2.extensions.connection,
@@ -91,13 +130,14 @@ def upsert_analyses(
 
     upsert_query = """
         INSERT INTO analyses (
-            analysis_id, release_id, insertion_date, dependencies, activation_events
+            analysis_id, release_id, insertion_date, dependencies, activation_events, semgrep_detections
         ) VALUES %s
         ON CONFLICT (analysis_id) DO UPDATE SET
             release_id = EXCLUDED.release_id,
             insertion_date = EXCLUDED.insertion_date,
             dependencies = EXCLUDED.dependencies,
-            activation_events = EXCLUDED.activation_events;
+            activation_events = EXCLUDED.activation_events,
+            semgrep_detections = EXCLUDED.semgrep_detections;
     """
 
     values = [
@@ -107,6 +147,7 @@ def upsert_analyses(
             row["insertion_date"],
             json.dumps(row["dependencies"]),
             json.dumps(row["activation_events"]),
+            json.dumps(row["semgrep_detections"]),
         )
         for _, row in analyses_df.iterrows()
     ]
@@ -155,6 +196,10 @@ def analyze_extension(logger: Logger, s3_client: BaseClient, row: pd.Series) -> 
     package_metadata = extract_package_metadata(package_json)
     analysis_data.update(package_metadata)
 
+    semgrep_output = semgrep_analysis()
+    semgrep_metadata = extract_semgrep_metadata(semgrep_output)
+    analysis_data.update(semgrep_metadata)
+
     clear_directory(logger)
 
     return analysis_data
@@ -187,7 +232,8 @@ def main():
     for _, row in combined_df.iterrows():
         # Ensure the release is uploaded to S3 and hasn't been analyzed before
         if row["uploaded_to_s3"] and row["release_id"] not in analyzed_release_ids:
-            analysis_metadata.append(analyze_extension(logger, s3_client, row))
+            analysis = analyze_extension(logger, s3_client, row)
+            analysis_metadata.append(analysis)
 
     # Upsert analyses
     new_analyses = pd.DataFrame(analysis_metadata)

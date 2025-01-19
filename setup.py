@@ -14,6 +14,7 @@ CREATE_ANALYSES_TABLE_QUERY = """
         insertion_date DATE NOT NULL,
         dependencies JSONB NOT NULL,
         activation_events JSONB NOT NULL,
+        semgrep_detections JSONB NOT NULL,
         FOREIGN KEY (release_id) REFERENCES releases (release_id) ON DELETE CASCADE
     );
 """
