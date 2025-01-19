@@ -1,0 +1,89 @@
+rules:
+  - id: detect-fetch-requests
+    languages: [javascript]
+    patterns:
+      - pattern: fetch($URL, ...)
+    message: "Detected fetch request to $URL, which could indicate external communication."
+    severity: WARNING
+    metadata:
+      category: External Communication
+      libraries: ["fetch"]
+  
+  - id: detect-axios-requests
+    languages: [javascript]
+    patterns:
+      - pattern: axios($URL, ...)
+      - pattern: axios.$METHOD($URL, ...)
+    message: "Detected Axios request to $URL, which could indicate external communication."
+    severity: WARNING
+    metadata:
+      category: External Communication
+      libraries: ["axios"]
+
+  - id: detect-xmlhttprequest
+    languages: [javascript]
+    patterns:
+      - pattern: |
+          const xhr = new XMLHttpRequest();
+          xhr.open($METHOD, $URL, ...);
+    message: "Detected XMLHttpRequest to $URL, which could indicate external communication."
+    severity: WARNING
+    metadata:
+      category: External Communication
+      libraries: ["XMLHttpRequest"]
+
+  - id: detect-node-http
+    languages: [javascript]
+    patterns:
+      - pattern: require('http').request($URL, ...)
+      - pattern: require('https').request($URL, ...)
+      - pattern: require('http').get($URL, ...)
+      - pattern: require('https').get($URL, ...)
+    message: "Detected HTTP(S) request to $URL, which could indicate external communication."
+    severity: WARNING
+    metadata:
+      category: External Communication
+      libraries: ["http", "https"]
+
+  - id: detect-websocket
+    languages: [javascript]
+    patterns:
+      - pattern: new WebSocket($URL, ...)
+    message: "Detected WebSocket connection to $URL, which could indicate external communication."
+    severity: WARNING
+    metadata:
+      category: External Communication
+      libraries: ["WebSocket"]
+
+  - id: detect-node-net-socket
+    languages: [javascript]
+    patterns:
+      - pattern: require('net').Socket().connect($PORT, $HOST, ...)
+    message: "Detected Node.js net socket connection to $HOST:$PORT, which could indicate external communication."
+    severity: WARNING
+    metadata:
+      category: External Communication
+      libraries: ["net"]
+
+  - id: detect-custom-http-libraries
+    languages: [javascript]
+    patterns:
+      - pattern: $LIBRARY($ARGS)
+      - metavariable-regex:
+          metavariable: $LIBRARY
+          regex: "(request|got|superagent)"
+    message: "Detected HTTP request using $LIBRARY, which could indicate external communication."
+    severity: WARNING
+    metadata:
+      category: External Communication
+      libraries: ["request", "got", "superagent"]
+
+  - id: detect-dynamic-imports
+    languages: [javascript]
+    patterns:
+      - pattern: import($MODULE)
+    message: "Dynamic import of $MODULE detected, which may fetch external resources."
+    severity: WARNING
+    metadata:
+      category: External Communication
+      libraries: ["import"]
