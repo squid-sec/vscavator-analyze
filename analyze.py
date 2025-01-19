@@ -24,17 +24,6 @@ from util import (
     upsert_data,
 )
 
-API_CALL_STRINGS = [
-    "https.request",
-    "axios.get",
-    "axios.post",
-    "axios.delete",
-    "axios.patch",
-    "axios.put",
-    'fetch("http',
-    "fetch('http",
-]
-
 
 def download_vsix_file(logger: Logger, s3_client: BaseClient, object_key: str) -> None:
     """Downloads the S3 object associated with the given key"""
@@ -93,18 +82,21 @@ def extract_package_metadata(package_json: dict) -> dict:
     }
 
 
-def semgrep_analysis() -> dict:
+def semgrep_analysis(logger: Logger) -> dict:
     """Performs static code analysis using semgrep"""
 
-    result = subprocess.run(
-        ["semgrep", "--config", "semgrep", "extensions/unzipped", "--json"],
-        text=True,
-        capture_output=True,
-        check=True,
-    )
+    try:
+        result = subprocess.run(
+            ["semgrep", "--config", "semgrep", "extensions/unzipped", "--json"],
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        return json.loads(result.stdout)
+    except subprocess.CalledProcessError as err:
+        logger.error("semgrep_analysis: error running semgrep analysis - %s", str(err))
 
-    semgrep_output = json.loads(result.stdout)
-    return semgrep_output
+    return {}
 
 
 def extract_semgrep_metadata(semgrep_output: dict) -> dict:
@@ -120,6 +112,77 @@ def extract_semgrep_metadata(semgrep_output: dict) -> dict:
     return semgrep_metadata
 
 
+def create_package_json_file(dependencies: dict) -> None:
+    """Creates a temporary package.json file"""
+
+    package_json = {
+        "name": "temp-package",
+        "version": "1.0.0",
+        "dependencies": dependencies,
+    }
+
+    # Ensure the directory exists
+    file_path = "extensions/packages/package.json"
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
+    with open(file_path, "w", encoding="utf-8") as file:
+        json.dump(package_json, file, indent=2)
+
+
+def install_package_lock_only(logger: Logger) -> None:
+    """Installs dependencies to generate package-lock.json (without installing packages)"""
+
+    try:
+        subprocess.run(
+            ["npm", "install", "--package-lock-only"],
+            cwd="extensions/packages",
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError as err:
+        logger.error(
+            "install_package_lock_only: error running npm install - %s", str(err)
+        )
+
+
+def run_npm_audit(logger: Logger) -> dict:
+    """Runs npm audit"""
+
+    try:
+        result = subprocess.run(
+            ["npm", "audit", "--json"],
+            cwd="extensions/packages",
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return json.loads(result.stdout)
+    except subprocess.CalledProcessError as err:
+        logger.error("run_npm_audit: error running npm audit - %s", str(err))
+
+    return {}
+
+
+def parse_audit_result(audit_json):
+    """Parses the npm audit result"""
+
+    parsed_vulnerabilities = {"npm_audit_vulnerabilities": []}
+
+    vulnerabilities = audit_json.get("advisories", {})
+    for _, advisory in vulnerabilities.items():
+        parsed_vulnerabilities["npm_audit_vulnerabilities"].append(
+            {
+                "package": advisory.get("module_name"),
+                "severity": advisory.get("severity"),
+                "title": advisory.get("title"),
+                "url": advisory.get("url"),
+            }
+        )
+
+    return parsed_vulnerabilities
+
+
 def upsert_analyses(
     logger: Logger,
     connection: psycopg2.extensions.connection,
@@ -130,14 +193,15 @@ def upsert_analyses(
 
     upsert_query = """
         INSERT INTO analyses (
-            analysis_id, release_id, insertion_date, dependencies, activation_events, semgrep_detections
+            analysis_id, release_id, insertion_date, dependencies, activation_events, semgrep_detections, npm_audit_vulnerabilities
         ) VALUES %s
         ON CONFLICT (analysis_id) DO UPDATE SET
             release_id = EXCLUDED.release_id,
             insertion_date = EXCLUDED.insertion_date,
             dependencies = EXCLUDED.dependencies,
             activation_events = EXCLUDED.activation_events,
-            semgrep_detections = EXCLUDED.semgrep_detections;
+            semgrep_detections = EXCLUDED.semgrep_detections,
+            npm_audit_vulnerabilities = EXCLUDED.npm_audit_vulnerabilities;
     """
 
     values = [
@@ -148,6 +212,7 @@ def upsert_analyses(
             json.dumps(row["dependencies"]),
             json.dumps(row["activation_events"]),
             json.dumps(row["semgrep_detections"]),
+            json.dumps(row["npm_audit_vulnerabilities"]),
         )
         for _, row in analyses_df.iterrows()
     ]
@@ -188,15 +253,25 @@ def analyze_extension(logger: Logger, s3_client: BaseClient, row: pd.Series) -> 
     extension_name = row["extension_name"]
     release_version = row["version"]
 
+    # Fetch .vsix file from S3
     object_key = f"extensions/{publisher_name}/{extension_name}/{release_version}.vsix"
     download_vsix_file(logger, s3_client, object_key)
     unzip_vsix_file(logger, object_key)
 
+    # package.json analysis
     package_json = find_package_json(logger, object_key)
     package_metadata = extract_package_metadata(package_json)
     analysis_data.update(package_metadata)
 
-    semgrep_output = semgrep_analysis()
+    # npm audit analysis
+    create_package_json_file(package_metadata["dependencies"])
+    install_package_lock_only(logger)
+    audit_json = run_npm_audit(logger)
+    audit_metadata = parse_audit_result(audit_json)
+    analysis_data.update(audit_metadata)
+
+    # semgrep analysis
+    semgrep_output = semgrep_analysis(logger)
     semgrep_metadata = extract_semgrep_metadata(semgrep_output)
     analysis_data.update(semgrep_metadata)
 
